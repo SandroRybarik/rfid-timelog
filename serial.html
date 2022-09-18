@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+
+<body>
+  <button id="serialPortPicker">Pick a serial port</button>
+
+  <script>
+    const WORSPACE_ID = -1
+    const API_KEY = '<API_KEY>'
+    const TOGGL_START_URL = 'https://api.track.toggl.com/api/v9/time_entries'
+    const TOGGLE_STOP_URL = (timeEntryId) => `https://api.track.toggl.com/api/v9/time_entries/${timeEntryId}`
+    const serialPortPickerBtn = document.querySelector('#serialPortPicker');
+    // State
+    let currentTimerId = null
+    let startMs = 0
+
+    /**
+     * Minimal API call for creating toggle time entry
+     */
+    async function togglStart() {
+      return fetch(TOGGL_START_URL, {
+        method: "POST",
+        body: JSON.stringify({ description: "Doing honest work right now!", created_with: "RFID Card reader!", start: new Date().toISOString(), wid: WORSPACE_ID }),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Basic ${btoa(`${API_KEY}:api_token`)}`
+        },
+      })
+        .then((resp) => resp.json())
+        .then((json) => {
+          startMs = new Date().getTime()
+          return json
+        })
+        .catch(err => {
+          console.error(err)
+          alert("Starting Toggl timer failed")
+        });
+    }
+
+    /**
+     * Minimal API call for stopping toggle time entry
+     * 
+     * @param {number} timeEntryId
+     */
+    async function toggleStop(timeEntryId) {
+      const endTimeMs = (new Date()).getTime()
+
+      return fetch(TOGGLE_STOP_URL(timeEntryId), {
+        method: "PUT",
+        body: JSON.stringify({ wid: WORSPACE_ID, stop: new Date().toISOString(), duration: Math.round((endTimeMs - startMs)/1000) }),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Basic ${btoa(`${API_KEY}:api_token`)}`
+        }
+      })
+        .then(res => res.json())
+        .then(json => {
+          return json
+        })
+        .catch(err => {
+          console.error(err)
+          alert("Stopping Toggl timer failed")
+        }) 
+    }
+
+    if ("serial" in navigator) {
+      // The Web Serial API is supported.
+      serialPortPickerBtn.addEventListener('click', async () => {
+        main();
+      });
+
+      async function main() {
+        // Prompt user to select any serial port.
+        const port = await navigator.serial.requestPort();
+
+        // const { usbProductId, usbVendorId } = port.getInfo();
+        console.log(port.getInfo());
+
+        await port.open({ baudRate: 9600 });
+
+        // Transform stream into string
+        const textDecoder = new TextDecoderStream();
+        const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+        const reader = textDecoder.readable.getReader();
+
+        // Listen to data coming from the serial device.
+        let buffer = ""
+        let message = ""
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            // Allow the serial port to be closed later.
+            reader.releaseLock();
+            break;
+          }
+
+          buffer += value
+
+          // append to buffer until we hit \r\n
+          if (buffer.includes('\r\n')) {
+            // Extract message
+            message = buffer.slice(0, buffer.indexOf('\r\n'))
+            // Reset buffer
+            buffer = ""
+
+            if (message === 'Authorized access' && currentTimerId === null) {
+              console.log({ DBG: 'Starting Toggl' })
+              const r = await togglStart() // Handle API calls
+              currentTimerId = r.id
+            } else if (message === 'Authorized access' && currentTimerId !== null) {
+              console.log({ DBG: 'Stopping Toggl' })
+              const r = await toggleStop(currentTimerId) // Handle API calls
+              currentTimerId = null
+            }
+          }
+        }
+      }
+    } else {
+      alert('Serial API is not supported in your browser. Check Serial API on the internet.')
+    }
+  </script>
+</body>
+
+</html>
